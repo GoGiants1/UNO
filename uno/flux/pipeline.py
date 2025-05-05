@@ -17,9 +17,9 @@ import os
 from typing import Literal
 
 import torch
+import torchvision.transforms.functional as TVF
 from einops import rearrange
 from PIL import ExifTags, Image
-import torchvision.transforms.functional as TVF
 
 from uno.flux.modules.layers import (
     DoubleStreamBlockLoraProcessor,
@@ -42,21 +42,21 @@ from uno.flux.util import (
 
 def find_nearest_scale(image_h, image_w, predefined_scales):
     """
-    根据图片的高度和宽度，找到最近的预定义尺度。
+    이미지의 높이와 너비를 기반으로 가장 가까운 사전 정의된 크기를 찾습니다.
 
-    :param image_h: 图片的高度
-    :param image_w: 图片的宽度
-    :param predefined_scales: 预定义尺度列表 [(h1, w1), (h2, w2), ...]
-    :return: 最近的预定义尺度 (h, w)
+    :param image_h: 이미지의 높이
+    :param image_w: 이미지의 너비
+    :param predefined_scales: 사전 정의된 크기 목록 [(h1, w1), (h2, w2), ...]
+    :return: 가장 가까운 사전 정의된 크기 (h, w)
     """
-    # 计算输入图片的长宽比
+    # 입력 이미지의 종횡비 계산
     image_ratio = image_h / image_w
 
-    # 初始化变量以存储最小差异和最近的尺度
-    min_diff = float('inf')
+    # 최소 차이와 가장 가까운 크기를 저장할 변수 초기화
+    min_diff = float("inf")
     nearest_scale = None
 
-    # 遍历所有预定义尺度，找到与输入图片长宽比最接近的尺度
+    # 모든 사전 정의된 크기를 순회하며 입력 이미지 종횡비와 가장 가까운 크기 찾기
     for scale_h, scale_w in predefined_scales:
         predefined_ratio = scale_h / scale_w
         diff = abs(predefined_ratio - image_ratio)
@@ -67,11 +67,12 @@ def find_nearest_scale(image_h, image_w, predefined_scales):
 
     return nearest_scale
 
+
 def preprocess_ref(raw_image: Image.Image, long_size: int = 512):
-    # 获取原始图像的宽度和高度
+    # 원본 이미지의 너비와 높이 가져오기
     image_w, image_h = raw_image.size
 
-    # 计算长边和短边
+    # 긴 변과 짧은 변 계산
     if image_w >= image_h:
         new_w = long_size
         new_h = int((long_size / image_w) * image_h)
@@ -79,32 +80,28 @@ def preprocess_ref(raw_image: Image.Image, long_size: int = 512):
         new_h = long_size
         new_w = int((long_size / image_h) * image_w)
 
-    # 按新的宽高进行等比例缩放
+    # 새로운 너비와 높이로 비율을 유지하며 크기 조정
     raw_image = raw_image.resize((new_w, new_h), resample=Image.LANCZOS)
     target_w = new_w // 16 * 16
     target_h = new_h // 16 * 16
 
-    # 计算裁剪的起始坐标以实现中心裁剪
+    # 중앙 크롭을 위한 시작 좌표 계산
     left = (new_w - target_w) // 2
     top = (new_h - target_h) // 2
     right = left + target_w
     bottom = top + target_h
 
-    # 进行中心裁剪
+    # 중앙 크롭 수행
     raw_image = raw_image.crop((left, top, right, bottom))
 
-    # 转换为 RGB 模式
+    # RGB 모드로 변환
     raw_image = raw_image.convert("RGB")
     return raw_image
 
+
 class UNOPipeline:
     def __init__(
-        self,
-        model_type: str,
-        device: torch.device,
-        offload: bool = False,
-        only_lora: bool = False,
-        lora_rank: int = 16
+        self, model_type: str, device: torch.device, offload: bool = False, only_lora: bool = False, lora_rank: int = 16
     ):
         self.device = device
         self.offload = offload
@@ -116,41 +113,35 @@ class UNOPipeline:
         self.use_fp8 = "fp8" in model_type
         if only_lora:
             self.model = load_flow_model_only_lora(
-                model_type,
-                device="cpu" if offload else self.device,
-                lora_rank=lora_rank,
-                use_fp8=self.use_fp8
+                model_type, device="cpu" if offload else self.device, lora_rank=lora_rank, use_fp8=self.use_fp8
             )
         else:
             self.model = load_flow_model(model_type, device="cpu" if offload else self.device)
 
-
     def load_ckpt(self, ckpt_path):
         if ckpt_path is not None:
             from safetensors.torch import load_file as load_sft
+
             print("Loading checkpoint to replace old keys")
             # load_sft doesn't support torch.device
-            if ckpt_path.endswith('safetensors'):
-                sd = load_sft(ckpt_path, device='cpu')
+            if ckpt_path.endswith("safetensors"):
+                sd = load_sft(ckpt_path, device="cpu")
                 missing, unexpected = self.model.load_state_dict(sd, strict=False, assign=True)
             else:
-                dit_state = torch.load(ckpt_path, map_location='cpu')
+                dit_state = torch.load(ckpt_path, map_location="cpu")
                 sd = {}
                 for k in dit_state.keys():
-                    sd[k.replace('module.','')] = dit_state[k]
+                    sd[k.replace("module.", "")] = dit_state[k]
                 missing, unexpected = self.model.load_state_dict(sd, strict=False, assign=True)
                 self.model.to(str(self.device))
             print(f"missing keys: {missing}\n\n\n\n\nunexpected keys: {unexpected}")
 
-    def set_lora(self, local_path: str = None, repo_id: str = None,
-                 name: str = None, lora_weight: int = 0.7):
+    def set_lora(self, local_path: str = None, repo_id: str = None, name: str = None, lora_weight: int = 0.7):
         checkpoint = load_checkpoint(local_path, repo_id, name)
         self.update_model_with_lora(checkpoint, lora_weight)
 
     def set_lora_from_collection(self, lora_type: str = "realism", lora_weight: int = 0.7):
-        checkpoint = load_checkpoint(
-            None, self.hf_lora_collection, self.lora_types_to_names[lora_type]
-        )
+        checkpoint = load_checkpoint(None, self.hf_lora_collection, self.lora_types_to_names[lora_type])
         self.update_model_with_lora(checkpoint, lora_weight)
 
     def update_model_with_lora(self, checkpoint, lora_weight):
@@ -161,7 +152,7 @@ class UNOPipeline:
             lora_state_dict = {}
             for k in checkpoint.keys():
                 if name in k:
-                    lora_state_dict[k[len(name) + 1:]] = checkpoint[k] * lora_weight
+                    lora_state_dict[k[len(name) + 1 :]] = checkpoint[k] * lora_weight
 
             if len(lora_state_dict):
                 if name.startswith("single_blocks"):
@@ -178,7 +169,6 @@ class UNOPipeline:
 
         self.model.set_attn_processor(lora_attn_procs)
 
-
     def __call__(
         self,
         prompt: str,
@@ -187,7 +177,7 @@ class UNOPipeline:
         guidance: float = 4,
         num_steps: int = 50,
         seed: int = 123456789,
-        **kwargs
+        **kwargs,
     ):
         width = 16 * (width // 16)
         height = 16 * (height // 16)
@@ -196,15 +186,7 @@ class UNOPipeline:
         if device_type == "mps":
             device_type = "cpu"  # for support macos mps
         with torch.autocast(enabled=self.use_fp8, device_type=device_type, dtype=torch.bfloat16):
-            return self.forward(
-                prompt,
-                width,
-                height,
-                guidance,
-                num_steps,
-                seed,
-                **kwargs
-            )
+            return self.forward(prompt, width, height, guidance, num_steps, seed, **kwargs)
 
     @torch.inference_mode()
     def gradio_generate(
@@ -225,10 +207,17 @@ class UNOPipeline:
         ref_long_side = 512 if len(ref_imgs) <= 1 else 320
         ref_imgs = [preprocess_ref(img, ref_long_side) for img in ref_imgs]
 
-        seed = seed if seed != -1 else torch.randint(0, 10 ** 8, (1,)).item()
+        seed = seed if seed != -1 else torch.randint(0, 10**8, (1,)).item()
 
-        img = self(prompt=prompt, width=width, height=height, guidance=guidance,
-                   num_steps=num_steps, seed=seed, ref_imgs=ref_imgs)
+        img = self(
+            prompt=prompt,
+            width=width,
+            height=height,
+            guidance=guidance,
+            num_steps=num_steps,
+            seed=seed,
+            ref_imgs=ref_imgs,
+        )
 
         filename = f"output/gradio/{seed}_{prompt[:20]}.png"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
@@ -250,12 +239,9 @@ class UNOPipeline:
         num_steps: int,
         seed: int,
         ref_imgs: list[Image.Image] | None = None,
-        pe: Literal['d', 'h', 'w', 'o'] = 'd',
+        pe: Literal["d", "h", "w", "o"] = "d",
     ):
-        x = get_noise(
-            1, height, width, device=self.device,
-            dtype=torch.bfloat16, seed=seed
-        )
+        x = get_noise(1, height, width, device=self.device, dtype=torch.bfloat16, seed=seed)
         timesteps = get_schedule(
             num_steps,
             (width // 8) * (height // 8) // (16 * 16),
@@ -264,21 +250,16 @@ class UNOPipeline:
         if self.offload:
             self.ae.encoder = self.ae.encoder.to(self.device)
         x_1_refs = [
-            self.ae.encode(
-                (TVF.to_tensor(ref_img) * 2.0 - 1.0) 
-                .unsqueeze(0).to(self.device, torch.float32)
-            ).to(torch.bfloat16)
+            self.ae.encode((TVF.to_tensor(ref_img) * 2.0 - 1.0).unsqueeze(0).to(self.device, torch.float32)).to(
+                torch.bfloat16
+            )
             for ref_img in ref_imgs
         ]
 
         if self.offload:
             self.offload_model_to_cpu(self.ae.encoder)
             self.t5, self.clip = self.t5.to(self.device), self.clip.to(self.device)
-        inp_cond = prepare_multi_ip(
-            t5=self.t5, clip=self.clip,
-            img=x,
-            prompt=prompt, ref_imgs=x_1_refs, pe=pe
-        )
+        inp_cond = prepare_multi_ip(t5=self.t5, clip=self.clip, img=x, prompt=prompt, ref_imgs=x_1_refs, pe=pe)
 
         if self.offload:
             self.offload_model_to_cpu(self.t5, self.clip)
@@ -304,7 +285,8 @@ class UNOPipeline:
         return output_img
 
     def offload_model_to_cpu(self, *models):
-        if not self.offload: return
+        if not self.offload:
+            return
         for model in models:
             model.cpu()
             torch.cuda.empty_cache()
